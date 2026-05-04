@@ -1,16 +1,88 @@
 #include "types.h"
-
-#include "fs.h"
-// please use the log module for printing errors
 #include "log.h"
+#include "fs.h"
+#include <stddef.h>
+#include <stdio.h>
+#include <fcntl.h>
+#include <string.h>
+#include <sys/stat.h>
+#include <sys/mman.h>
+#include <unistd.h>
+#include <stdbool.h>
 
-int main(int argc, char *argv[]) {
-    // YOUR CODE HERE
-    // myfsck <file_system_image> or
-    // myfsck -r <file_system_image> (extra credit)
+char * imgpath;
+void * img;
+struct superblock * spblcok;
+struct dinode * startinode;
+uint sbsize,nblocks,ninodes,datblkstnum,datblkednum;
 
-    // You can exit right after reporting the first error in normal mode
-    // Don't print anything in stderr except error messages defined in log.h
-    // return 1 if any errors are detected, otherwise return 0
+void check_size(void)
+{
+    uint inodezie=ninodes/IPB+1,bitmapsize=sbsize/BPB+1;
+    datblkstnum=inodezie+bitmapsize+2;
+    datblkednum=nblocks+datblkstnum;
+    if(sbsize!=datblkednum)
+    {
+        superblock_error();
+        exit(1);
+    }
+}
+
+void check_node_type(struct dinode * temp)
+{
+    short type=temp->type;
+    if(type!=0&&type!=1&&type!=2&&type!=3)
+    {
+        bad_inode_error();
+        exit(1);
+    }
+}
+
+int main(int argc, char *argv[]) 
+{
+    if(argc==2)
+    {
+        imgpath=argv[1];
+    }
+    else if(argc==3)
+    {
+        if(strcmp("-r",argv[1])==0)
+        {
+            imgpath=argv[2];
+        }
+        else 
+        {
+            printf("invaid input\n");
+            return 0;
+        }
+    }
+    else 
+    {
+        printf("invaid input\n");
+        return 0;
+    }
+    int fd=open(imgpath,O_RDONLY);
+    if(fd<0)
+    {
+        fprintf(stderr, "image not found.\n"); 
+        exit(1);
+    }
+    struct stat st;
+    if(fstat(fd,&st)<0)
+    {
+        close(fd);
+        exit(1);
+    }
+    img=mmap(NULL,st.st_size,PROT_READ, MAP_PRIVATE, fd, 0);
+    if(img<0) 
+    {
+        close(fd);
+        exit(1);
+    }
+    
+
+
+
+
     return 0;
 }
