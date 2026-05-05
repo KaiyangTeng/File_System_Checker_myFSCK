@@ -54,31 +54,95 @@ void check_direct_address(uint addrs[])
 }
 
 
-void check_indirect_address(uint addrs[])
+int check_indirect_address(uint addrs[],bool visited[])
 {
+    int blkcnt=0;
     uint ndirblknum=addrs[NDIRECT];
+    if(ndirblknum!=0&&visited[ndirblknum])
+    {
+        bad_indirect_address_once_error();
+        exit(1);
+    }
     if(ndirblknum!=0)
     {
         if(ndirblknum>=datblkstnum&&ndirblknum<datblkednum)
         {
+            visited[ndirblknum]=1;
+            // blkcnt++;
             uint * startptr=(uint *)((char *)img+ndirblknum*BSIZE);
             for(int i=0;i<128;i++)
             {
                 uint temp=startptr[i];
-                if(temp<datblkstnum||temp>=datblkednum)
+                if(temp!=0&&(temp<datblkstnum||temp>=datblkednum))
                 {
                     bad_indirect_address_error();
                     exit(1);    
+                }
+                if(temp!=0&&visited[addrs[i]])
+                {
+                    bad_indirect_address_once_error();
+                    exit(1);
+                }
+                if(temp!=0) 
+                {
+                    visited[addrs[i]]=1;
+                    blkcnt++;
                 }
             }
         }
         else 
         {
-            bad_indirect_address_error();
+            check_indirect_address(uint addrs[])
+            exit(1);
+        }
+    }
+    return blkcnt;
+}
+
+
+void traverse_dirent(uint blknum,ushort currinodenum,int * curcnt,int * parcnt)
+{
+    struct dirent * startptr=(struct dirent *)((char *)img+blknum*BSIZE);
+    int nentry=BSIZE/sizeof(struct dirent);
+    for(int i=0;i<nentry;i++)
+    {
+        struct dirent * tempdirent=startptr+i;
+        if(tempdirent->inum!=0)
+        {
+            if(strncmp(".",tempdirent->name,DIRSIZ)==0)
+            {
+                if(tempdirent->inum!=currinodenum)
+                {
+                    bad_directory_format_error();
+                    exit(1);
+                }
+                (*curcnt)++;
+            }
+            if(strncmp("..",tempdirent->name,DIRSIZ)==0) (*parcnt)++;
+        }
+    }
+}
+
+void helper()
+{
+    bool dirvisited[sbsize+1],indirvisited[sbsize+1];
+    memset(dirvisited,0,sizeof(dirvisited));
+    memset(indirvisited,0,sizeof(indirvisited));
+    for(int i=0;i<ninodes;i++)
+    {
+        struct dinode * temp=startinode+i;
+        check_node_type(temp);
+        int dircnt=check_direct_address(temp->addrs,dirvisited);
+        int indircnt=check_indirect_address(temp->addrs,indirvisited);
+        int sum=dircnt+indircnt;
+        if(temp->size<=(sum-1)*BSIZE||temp->size>sum*BSIZE)
+        {
+            bad_file_size_error();
             exit(1);
         }
     }
 }
+
 
 
 int main(int argc, char *argv[]) 
