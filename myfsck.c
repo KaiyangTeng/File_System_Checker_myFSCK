@@ -38,21 +38,30 @@ void check_node_type(struct dinode * temp)
     }
 }
 
-void check_direct_address(uint addrs[])
+int check_direct_address(uint addrs[],bool visited[])
 {
+    int blkcnt=0;
     for(int i=0;i<NDIRECT;i++)
     {
+        if(addrs[i]!=0&&(addrs[i]<datblkstnum||addrs[i]>=datblkednum))
+        {
+            bad_direct_address_error();
+            exit(1);
+        }
+        if(addrs[i]!=0&&visited[addrs[i]])
+        {
+            bad_direct_address_once_error();
+            exit(1);
+        }
         if(addrs[i]!=0)
         {
-            if(addrs[i]<datblkstnum||addrs[i]>=datblkednum)
-            {
-                bad_direct_address_error();
-                exit(1);
-            }
+            visited[addrs[i]]=1;
+            blkcnt++;
         }
     }
+    return blkcnt;
 }
-
+            
 
 int check_indirect_address(uint addrs[],bool visited[])
 {
