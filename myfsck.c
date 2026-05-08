@@ -50,7 +50,8 @@ void traverse_dirent(uint blknum,ushort currinodenum,int * curcnt,int * parcnt,i
     }
 }
 
-
+// Check whether the superblock layout is consistent.
+// Also calculates the valid data block range.
 void check_size(void)
 {
     uint inodezie=ninodes/IPB+1,bitmapsize=sbsize/BPB+1;
@@ -63,6 +64,7 @@ void check_size(void)
     }
 }
 
+// Check whether an inode type is valid.
 void check_node_type(struct dinode * temp)
 {
     short type=temp->type;
