@@ -16,6 +16,41 @@ struct superblock * spblcok;
 struct dinode * startinode;
 uint sbsize,nblocks,ninodes,datblkstnum,datblkednum;
 
+bool bit_is_used(uint blknum)
+{
+    char * start=(char*)img+BBLOCK(blknum,ninodes)*BSIZE;
+    uint bytepos=(blknum%BPB)/8;
+    uint bitpos=blknum%8;
+    return start[bytepos]&(1<<bitpos);
+}
+
+
+
+void traverse_dirent(uint blknum,ushort currinodenum,int * curcnt,int * parcnt,int inodeindirent[])
+{
+    struct dirent * startptr=(struct dirent *)((char *)img+blknum*BSIZE);
+    int nentry=BSIZE/sizeof(struct dirent);
+    for(int i=0;i<nentry;i++)
+    {
+        struct dirent * tempdirent=startptr+i;
+        if(tempdirent->inum!=0)
+        {
+            if(strncmp(".",tempdirent->name,DIRSIZ)==0)
+            {
+                if(tempdirent->inum!=currinodenum)
+                {
+                    bad_directory_format_error();
+                    exit(1);
+                }
+                (*curcnt)++;
+            }
+            else if(strncmp("..",tempdirent->name,DIRSIZ)==0) (*parcnt)++;
+            else inodeindirent[tempdirent->inum]+=1;
+        }
+    }
+}
+
+
 void check_size(void)
 {
     uint inodezie=ninodes/IPB+1,bitmapsize=sbsize/BPB+1;
@@ -38,35 +73,54 @@ void check_node_type(struct dinode * temp)
     }
 }
 
-int check_direct_address(uint addrs[],bool visited[])
+int check_direct_address(struct dinode * inode,bool visited[],ushort currinodenum,int inodeindirent[])
 {
     int blkcnt=0;
     for(int i=0;i<NDIRECT;i++)
     {
-        if(addrs[i]!=0&&(addrs[i]<datblkstnum||addrs[i]>=datblkednum))
+        uint tempblknum=inode->addrs[i];
+        if(tempblknum!=0&&(tempblknum<datblkstnum||tempblknum>=datblkednum))
         {
             bad_direct_address_error();
             exit(1);
         }
-        if(addrs[i]!=0&&visited[addrs[i]])
+        if(tempblknum!=0&&visited[tempblknum])
         {
             bad_direct_address_once_error();
             exit(1);
         }
-        if(addrs[i]!=0)
+        if(tempblknum!=0)
         {
             visited[addrs[i]]=1;
+            if(!bit_is_used(tempblknum))
+            {
+                bad_used_address_error();
+                exit(1);
+            }
+            visited[tempblknum]=1;
             blkcnt++;
+            int curcnt=0,parcnt=0;
+            if(inode->type==1) traverse_dirent(tempblknum,currinodenum,&curcnt,&parcnt,inodeindirent);
+            if(curcnt!=1||parcnt!=1) 
+            {
+                bad_directory_format_error();
+                exit(1);
+            }
         }
     }
     return blkcnt;
 }
             
 
-int check_indirect_address(uint addrs[],bool visited[])
+int check_indirect_address(struct dinode * inode,bool visited[],ushort currinodenum,int inodeindirent[])
 {
     int blkcnt=0;
-    uint ndirblknum=addrs[NDIRECT];
+    uint ndirblknum=inode->addrs[NDIRECT];
+    if(!bit_is_used(ndirblknum))
+    {
+        bad_used_address_error();
+        exit(1);
+    }
     if(ndirblknum!=0&&visited[ndirblknum])
     {
         bad_indirect_address_once_error();
@@ -87,7 +141,7 @@ int check_indirect_address(uint addrs[],bool visited[])
                     bad_indirect_address_error();
                     exit(1);    
                 }
-                if(temp!=0&&visited[addrs[i]])
+                if(temp!=0&&visited[temp])
                 {
                     bad_indirect_address_once_error();
                     exit(1);
@@ -95,7 +149,20 @@ int check_indirect_address(uint addrs[],bool visited[])
                 if(temp!=0) 
                 {
                     visited[addrs[i]]=1;
+                    if(!bit_is_used(temp))
+                    {
+                        bad_used_address_error();
+                        exit(1);
+                    }
+                    visited[temp]=1;
                     blkcnt++;
+                    int curcnt=0,parcnt=0;
+                    if(inode->type==1) traverse_dirent(temp,currinodenum,&curcnt,&parcnt,inodeindirent);
+                    if(curcnt!=1||parcnt!=1) 
+                    {
+                        bad_directory_format_error();
+                        exit(1);
+                    }
                 }
             }
         }
@@ -109,44 +176,53 @@ int check_indirect_address(uint addrs[],bool visited[])
 }
 
 
-void traverse_dirent(uint blknum,ushort currinodenum,int * curcnt,int * parcnt)
-{
-    struct dirent * startptr=(struct dirent *)((char *)img+blknum*BSIZE);
-    int nentry=BSIZE/sizeof(struct dirent);
-    for(int i=0;i<nentry;i++)
-    {
-        struct dirent * tempdirent=startptr+i;
-        if(tempdirent->inum!=0)
-        {
-            if(strncmp(".",tempdirent->name,DIRSIZ)==0)
-            {
-                if(tempdirent->inum!=currinodenum)
-                {
-                    bad_directory_format_error();
-                    exit(1);
-                }
-                (*curcnt)++;
-            }
-            if(strncmp("..",tempdirent->name,DIRSIZ)==0) (*parcnt)++;
-        }
-    }
-}
 
 void helper()
 {
-    bool dirvisited[sbsize+1],indirvisited[sbsize+1];
-    memset(dirvisited,0,sizeof(dirvisited));
-    memset(indirvisited,0,sizeof(indirvisited));
+    bool blkvisited[sbsize+1];
+    bool usedinode[ninodes+1];
+    int inodeindirent[ninodes+1];
+    memset(blkvisited,0,sizeof(blkvisited));
+    memset(usedinode,0,sizeof(usedinode));
+    memset(inodeindirent,0,sizeof(inodeindirent));
     for(int i=0;i<ninodes;i++)
     {
         struct dinode * temp=startinode+i;
         check_node_type(temp);
-        int dircnt=check_direct_address(temp->addrs,dirvisited);
-        int indircnt=check_indirect_address(temp->addrs,indirvisited);
+        int dircnt=check_direct_address(temp,blkvisited,i+1,inodeindirent);
+        int indircnt=check_indirect_address(temp,blkvisited,i+1,inodeindirent);
         int sum=dircnt+indircnt;
         if(temp->size<=(sum-1)*BSIZE||temp->size>sum*BSIZE)
         {
             bad_file_size_error();
+            exit(1);
+        }
+        if(temp->type!=0) usedinode[i+1]=1;
+    }
+
+
+    
+    for(int i=0;i<ninodes;i++)
+    {
+        struct dinode * temp=startinode+i;
+        if(usedinode[i+1]&&!inodeindirent[i+1])
+        {
+            bad_used_inode_not_found_error();
+            exit(1);
+        }
+        if(!usedinode[i+1]&&inodeindirent[i+1])
+        {
+            bad_inode_referred_marked_error();
+            exit(1);
+        }
+        if(temp->type==2&&temp->nlink!=inodeindirent[i+1])
+        {
+            bad_reference_count_error();
+            exit(1);
+        }
+        if(temp->type==1&&inodeindirent[i+1]!=1)
+        {
+            bad_directory_once_error();
             exit(1);
         }
     }
