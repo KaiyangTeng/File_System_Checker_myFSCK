@@ -26,7 +26,7 @@ bool bit_is_used(uint blknum)
 
 
 
-void traverse_dirent(uint blknum,ushort currinodenum,int * curcnt,int * parcnt,int inodeindirent[])
+void traverse_dirent(uint blknum,ushort currinodenum,int * curcnt,int * parcnt,int inodeindirent[],int parentdotdot[],int parententry[])
 {
     struct dirent * startptr=(struct dirent *)((char *)img+blknum*BSIZE);
     int nentry=BSIZE/sizeof(struct dirent);
@@ -42,10 +42,20 @@ void traverse_dirent(uint blknum,ushort currinodenum,int * curcnt,int * parcnt,i
                     bad_directory_format_error();
                     exit(1);
                 }
+                if(currinodenum==ROOTINO) inodeindirent[ROOTINO]+=1;
                 (*curcnt)++;
             }
-            else if(strncmp("..",tempdirent->name,DIRSIZ)==0) (*parcnt)++;
-            else inodeindirent[tempdirent->inum]+=1;
+            else if(strncmp("..",tempdirent->name,DIRSIZ)==0) 
+            {
+                parentdotdot[currinodenum]=tempdirent->inum;
+                (*parcnt)++;
+            }
+            else 
+            {
+                inodeindirent[tempdirent->inum]+=1;
+                struct dinode * child=startinode+tempdirent->inum;
+                if(child->type==1) parententry[tempdirent->inum]=currinodenum;
+            }
         }
     }
 }
@@ -75,7 +85,7 @@ void check_node_type(struct dinode * temp)
     }
 }
 
-int check_direct_address(struct dinode * inode,bool visited[],ushort currinodenum,int inodeindirent[])
+int check_direct_address(struct dinode * inode,bool visited[],ushort currinodenum,int inodeindirent[],int * curcnt,int * parcnt,int parentdotdot[],int parententry[])
 {
     int blkcnt=0;
     for(int i=0;i<NDIRECT;i++)
@@ -93,7 +103,6 @@ int check_direct_address(struct dinode * inode,bool visited[],ushort currinodenu
         }
         if(tempblknum!=0)
         {
-            visited[addrs[i]]=1;
             if(!bit_is_used(tempblknum))
             {
                 bad_used_address_error();
@@ -101,37 +110,35 @@ int check_direct_address(struct dinode * inode,bool visited[],ushort currinodenu
             }
             visited[tempblknum]=1;
             blkcnt++;
-            int curcnt=0,parcnt=0;
-            if(inode->type==1) traverse_dirent(tempblknum,currinodenum,&curcnt,&parcnt,inodeindirent);
-            if(curcnt!=1||parcnt!=1) 
+            if(inode->type==1) 
             {
-                bad_directory_format_error();
-                exit(1);
+                traverse_dirent(tempblknum,currinodenum,curcnt,parcnt,inodeindirent,parentdotdot,parententry);
             }
         }
     }
     return blkcnt;
 }
+
             
 
-int check_indirect_address(struct dinode * inode,bool visited[],ushort currinodenum,int inodeindirent[])
+int check_indirect_address(struct dinode * inode,bool visited[],ushort currinodenum,int inodeindirent[],int * curcnt,int * parcnt,int parentdotdot[],int parententry[])
 {
     int blkcnt=0;
     uint ndirblknum=inode->addrs[NDIRECT];
-    if(!bit_is_used(ndirblknum))
-    {
-        bad_used_address_error();
-        exit(1);
-    }
-    if(ndirblknum!=0&&visited[ndirblknum])
-    {
-        bad_indirect_address_once_error();
-        exit(1);
-    }
     if(ndirblknum!=0)
     {
         if(ndirblknum>=datblkstnum&&ndirblknum<datblkednum)
         {
+            if(visited[ndirblknum])
+            {
+                bad_indirect_address_once_error();
+                exit(1);
+            }
+            if(!bit_is_used(ndirblknum))
+            {
+                bad_used_address_error();
+                exit(1);
+            }
             visited[ndirblknum]=1;
             // blkcnt++;
             uint * startptr=(uint *)((char *)img+ndirblknum*BSIZE);
@@ -150,7 +157,6 @@ int check_indirect_address(struct dinode * inode,bool visited[],ushort currinode
                 }
                 if(temp!=0) 
                 {
-                    visited[addrs[i]]=1;
                     if(!bit_is_used(temp))
                     {
                         bad_used_address_error();
@@ -158,19 +164,16 @@ int check_indirect_address(struct dinode * inode,bool visited[],ushort currinode
                     }
                     visited[temp]=1;
                     blkcnt++;
-                    int curcnt=0,parcnt=0;
-                    if(inode->type==1) traverse_dirent(temp,currinodenum,&curcnt,&parcnt,inodeindirent);
-                    if(curcnt!=1||parcnt!=1) 
+                    if(inode->type==1) 
                     {
-                        bad_directory_format_error();
-                        exit(1);
+                        traverse_dirent(temp,currinodenum,curcnt,parcnt,inodeindirent,parentdotdot,parententry);
                     }
                 }
             }
         }
         else 
         {
-            check_indirect_address(uint addrs[])
+            bad_indirect_address_error();
             exit(1);
         }
     }
@@ -184,48 +187,117 @@ void helper()
     bool blkvisited[sbsize+1];
     bool usedinode[ninodes+1];
     int inodeindirent[ninodes+1];
+    int parentdotdot[ninodes+1];
+    int parententry[ninodes+1];
     memset(blkvisited,0,sizeof(blkvisited));
     memset(usedinode,0,sizeof(usedinode));
     memset(inodeindirent,0,sizeof(inodeindirent));
-    for(int i=0;i<ninodes;i++)
+    memset(parentdotdot,-1,sizeof(parentdotdot));
+    memset(parententry,-1,sizeof(parententry));
+    for(uint i=0;i<ninodes;i++)
     {
         struct dinode * temp=startinode+i;
         check_node_type(temp);
-        int dircnt=check_direct_address(temp,blkvisited,i+1,inodeindirent);
-        int indircnt=check_indirect_address(temp,blkvisited,i+1,inodeindirent);
-        int sum=dircnt+indircnt;
-        if(temp->size<=(sum-1)*BSIZE||temp->size>sum*BSIZE)
+        if(i!=0&&temp->type!=0) 
         {
-            bad_file_size_error();
-            exit(1);
+            int curcnt=0,parcnt=0;
+            int dircnt=check_direct_address(temp,blkvisited,i,inodeindirent,&curcnt,&parcnt,parentdotdot,parententry);
+            int indircnt=check_indirect_address(temp,blkvisited,i,inodeindirent,&curcnt,&parcnt,parentdotdot,parententry);
+            int sum=dircnt+indircnt;
+            if(temp->type==1&&(curcnt!=1||parcnt!=1)) 
+            {
+                bad_directory_format_error();
+                exit(1);
+            }
+            if(sum==0)
+            {
+                if(temp->size!=0)
+                {
+                    bad_file_size_error();
+                    exit(1);
+                }
+            }
+            else 
+            {
+                if(temp->size<=(uint)(sum-1)*BSIZE||temp->size>(uint)sum*BSIZE)
+                {
+                    bad_file_size_error();
+                    exit(1);
+                }
+            }
+            usedinode[i]=1;
         }
-        if(temp->type!=0) usedinode[i+1]=1;
     }
 
+    for(uint i=datblkstnum;i<datblkednum;i++)
+    {
+        if(bit_is_used(i)&&!blkvisited[i])
+        {
+            bad_bitmap_marked_used_error();
+            exit(1);
+        }
+    }
 
     
-    for(int i=0;i<ninodes;i++)
+    for(uint i=1;i<ninodes;i++)
     {
         struct dinode * temp=startinode+i;
-        if(usedinode[i+1]&&!inodeindirent[i+1])
+        if(usedinode[i]&&!inodeindirent[i])
         {
             bad_used_inode_not_found_error();
             exit(1);
         }
-        if(!usedinode[i+1]&&inodeindirent[i+1])
+        if(!usedinode[i]&&inodeindirent[i])
         {
             bad_inode_referred_marked_error();
             exit(1);
         }
-        if(temp->type==2&&temp->nlink!=inodeindirent[i+1])
+        if(temp->type==2&&temp->nlink!=inodeindirent[i])
         {
             bad_reference_count_error();
             exit(1);
         }
-        if(temp->type==1&&inodeindirent[i+1]!=1)
+        if(temp->type==1&&inodeindirent[i]!=1)
         {
             bad_directory_once_error();
             exit(1);
+        }
+        if(temp->type==1)
+        {
+            if(i==ROOTINO)
+            {
+                if(parentdotdot[i]!=ROOTINO)
+                {
+                    bad_parent_directory_error();
+                    exit(1);
+                }
+            }
+            else
+            {
+                if(parententry[i]==-1||parentdotdot[i]!=parententry[i])
+                {
+                    bad_parent_directory_error();
+                    exit(1);
+                }
+            }
+            bool seen[ninodes+1];
+            memset(seen,0,sizeof(seen));
+            int cur=i;
+            while(cur!=ROOTINO)
+            {
+                if(seen[cur])
+                {
+                    bad_directory_error();
+                    exit(1);
+                }
+                seen[cur]=1;
+                cur=parentdotdot[cur];
+                if(cur==-1)
+                {
+                    bad_directory_error();
+                    exit(1);
+                }
+            }
         }
     }
 }
@@ -238,22 +310,10 @@ int main(int argc, char *argv[])
     {
         imgpath=argv[1];
     }
-    else if(argc==3)
-    {
-        if(strcmp("-r",argv[1])==0)
-        {
-            imgpath=argv[2];
-        }
-        else 
-        {
-            printf("invaid input\n");
-            return 0;
-        }
-    }
     else 
     {
-        printf("invaid input\n");
-        return 0;
+        fprintf(stderr, "Usage: myfsck <file_system_image>\n");
+        exit(1);
     }
     int fd=open(imgpath,O_RDONLY);
     if(fd<0)
@@ -268,15 +328,17 @@ int main(int argc, char *argv[])
         exit(1);
     }
     img=mmap(NULL,st.st_size,PROT_READ, MAP_PRIVATE, fd, 0);
-    if(img<0) 
+    if(img==MAP_FAILED) 
     {
         close(fd);
         exit(1);
     }
-    
-
-
-
-
+    spblcok=(struct superblock *)((char*)img+BSIZE);
+    startinode=(struct dinode *)((char*)spblcok+BSIZE);
+    sbsize=spblcok->size;
+    nblocks=spblcok->nblocks;
+    ninodes=spblcok->ninodes;
+    check_size();
+    helper();
     return 0;
 }
