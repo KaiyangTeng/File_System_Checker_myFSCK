@@ -1,37 +1,149 @@
-# MP4
+# File System Checker
 
-Name: Kaiyang Teng
+This project implements a user-level file system checker, `myfsck`, for a simplified xv6-style file system image. The checker validates on-disk metadata structures including the superblock, inode table, data block addresses, bitmap, directory entries, file sizes, and link counts.
 
-NetID: kteng4
+The goal of this project is to detect file system inconsistencies and report the first error found using the required MP4 error format. If the image is valid, the checker exits silently with status code `0`.
 
-## Project Introduction
+## Features
 
-The objective of this MP4 is to implement a user-level file system checker for the provided CS 423 file system image format. The checker reads a file system image, examines the on-disk metadata and file system structures, and reports consistency errors using the required error functions from log.h.
+* Parses and validates a binary file system image using `mmap`
+* Verifies superblock metadata and file system layout consistency
+* Checks inode validity for free, file, directory, and device inode types
+* Validates direct and indirect data block addresses
+* Detects duplicate block usage across in-use inodes
+* Cross-checks inode block usage against the bitmap
+* Validates directory structure, including `.` and `..` entries
+* Tracks inode references from directory entries
+* Verifies regular file link counts
+* Ensures directories do not appear multiple times in the file system
+* Validates inode file sizes against allocated data blocks
+* Implements extra credit checks for parent directory consistency and directory reachability
 
-Unlike a repair tool, this implementation focuses on detecting file system inconsistencies. If the image is valid, the checker exits silently with status code 0. If an error is detected, the checker prints the corresponding MP4_ERR message and exits immediately with status code 1.
+## File System Format
 
-## Implementation
+The checker works with the provided CS 423 file system format:
 
-I implemented the checker in myfsck.c. The program first validates the command-line arguments, opens the input image, and maps it into memory using mmap(). After the image is mapped, the checker reads the superblock from block 1 and locates the inode table starting from block 2. The superblock information is then used to calculate the inode region, bitmap region, and valid data block range.
+* Block `0`: unused
+* Block `1`: superblock
+* Blocks starting at `2`: inode table
+* Following blocks: bitmap blocks
+* Remaining blocks: data blocks
 
-The checker scans all inodes in the inode table. For each inode, it first verifies that the inode type is either free or one of the valid file system types: directory, regular file, or device. For every in-use inode, the checker validates all direct block addresses and the indirect block address. Each used address must point to a valid data block and must also be marked as used in the bitmap.
+Important on-disk structures are defined in `fs.h`:
 
-While scanning direct and indirect blocks, the checker records which data blocks are actually used. This information is later compared against the bitmap. If a bitmap bit marks a data block as used but no inode or indirect block actually uses it, the checker reports a bitmap inconsistency. The checker also detects duplicate block usage across in-use inodes.
+* `struct superblock`
+* `struct dinode`
+* `struct dirent`
 
-For directory inodes, the checker scans all directory entries in the directory data blocks. It verifies that every directory contains both . and .. entries, and that the . entry points back to the directory itself. During this scan, the checker also records how many times each inode is referenced by directory entries. This reference count is used to detect in-use inodes that are not found in any directory, directory entries that refer to free inodes, incorrect file reference counts, and directories that appear more than once in the file system.
+Each inode contains 12 direct block addresses and one indirect block address.
 
-The checker also validates file size consistency. For each in-use inode, the number of data blocks used by that inode is compared with the inode size field. The file size must fit within the range allowed by the number of allocated data blocks.
+## Build
 
-## Extra Credit Checks
+Run:
 
-I also implemented the extra credit checks for directory parent relationships and directory reachability.
+```
+make myfsck
+```
 
-For the parent directory check, the checker records the inode number stored in each directory’s .. entry. It also records the actual parent-child relationship observed from normal directory entries. After scanning the file system, the checker compares these two relationships. For the root directory, .. must point back to the root itself. For every other directory, the .. entry must match the parent directory that actually points to it.
+The provided Makefile can also build the helper tools:
 
-For the directory reachability check, the checker follows the .. chain of every directory. Each directory must eventually trace back to the root directory. If the checker detects an invalid parent, a non-directory parent, a missing parent, or a loop in the parent chain, it reports an inaccessible directory error.
+```
+make mkfs
+make lsfs
+```
+
+## Usage
+
+Run:
+
+```
+./myfsck file_system_image
+```
+
+If the image is valid, the checker exits silently with status code `0`.
+
+If the image is invalid, the checker prints the corresponding `MP4_ERR` message to `stderr` and exits with status code `1`.
+
+Example:
+
+```
+./myfsck bad_direct_addr.img
+```
+
+Output:
+
+```
+MP4_ERR: bad direct address in inode.
+```
+
+## Consistency Checks
+
+The checker detects the required MP4 consistency errors:
+
+1. Corrupted superblock
+2. Invalid inode type
+3. Invalid direct or indirect block address
+4. Malformed directory entries
+5. Inode address marked free in bitmap
+6. Bitmap block marked used but not referenced
+7. Direct address used more than once
+8. Incorrect file size
+9. In-use inode not found in any directory
+10. Directory entry referring to a free inode
+11. Incorrect regular file reference count
+12. Directory appearing more than once
+
+Extra credit checks implemented:
+
+13. Parent directory mismatch
+14. Inaccessible directory caused by invalid parent chains or directory loops
+
+## Implementation Overview
+
+The checker maps the entire file system image into memory and performs a full metadata scan.
+
+First, it reads the superblock and calculates the inode region, bitmap region, and valid data block range. It then scans every inode in the inode table. For each in-use inode, the checker validates all direct and indirect block addresses, records used blocks, and verifies that each referenced block is also marked in the bitmap.
+
+Directory inodes are handled by scanning their directory entry blocks. During this pass, the checker validates `.` and `..`, counts inode references, and records parent-child relationships. These reference counts are later used to verify inode reachability, file link counts, and directory uniqueness.
+
+After all inodes are scanned, the checker performs global consistency checks by comparing inode-used blocks against bitmap-used blocks, directory references against allocated inodes, file inode `nlink` values against actual directory references, and directory parent entries against observed parent-child relationships.
+
+The checker exits immediately when the first inconsistency is detected.
 
 ## Testing
 
-I tested the checker using the provided good.img and bad_direct_addr.img images. The valid image exits with status code 0 and produces no output. The corrupted direct-address image correctly reports:
-MP4_ERR: bad direct address in inode.
-I also used the provided mkfs and lsfs tools to generate and inspect additional file system images during testing.
+The implementation was tested with the provided sample images:
+
+```
+./myfsck good.img
+./myfsck bad_direct_addr.img
+```
+
+Additional test images can be generated using the provided `mkfs` tool:
+
+```
+./mkfs fs.img test_directory
+./lsfs fs.img
+./myfsck fs.img
+```
+
+Corrupted images can be manually generated by modifying inode fields, bitmap bits, directory entries, or block addresses to test each consistency rule.
+
+## Project Structure
+
+```
+.
+├── myfsck.c     # File system checker implementation
+├── fs.h         # On-disk file system format definitions
+├── types.h      # Basic type definitions
+├── stat.h       # File type definitions
+├── log.h        # Required MP4 error-reporting functions
+├── mkfs.c       # File system image creation tool
+├── lsfs.c       # File system image inspection tool
+├── Makefile     # Build targets
+└── README.md
+```
+
+## Key Takeaways
+
+This project demonstrates low-level file system metadata validation, including inode traversal, block address checking, bitmap consistency, directory reference tracking, and parent-chain validation. It required careful reasoning about the relationship between on-disk data structures and global file system invariants.
